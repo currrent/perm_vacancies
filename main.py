@@ -1,3 +1,5 @@
+import sys
+sys.stdout.reconfigure(line_buffering=True)
 import os
 import sqlite3
 import requests
@@ -403,3 +405,4 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
 
         print("\nАгрегатор остановлен пользователем")
+
