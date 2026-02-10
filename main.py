@@ -334,9 +334,9 @@ def run_aggregator():
     # ВАЖНО: Укажите ваш токен бота и username канала
     BOT_TOKEN = os.getenv("BOT_TOKEN")
     CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME")
-    if not BOT_TOKEN or not CHANNEL_USERNAME:
-        raise RuntimeError("Не заданы BOT_TOKEN или CHANNEL_USERNAME")
-
+    print("BOT_TOKEN:", "OK" if BOT_TOKEN else "MISSING", flush=True)
+    print("CHANNEL_USERNAME:", CHANNEL_USERNAME, flush=True)
+    
     publisher = TelegramChannelPublisher(BOT_TOKEN)
 
     # Получаем новые вакансии (ищем за последние 7 дней)
@@ -401,4 +401,5 @@ if __name__ == "__main__":
             schedule.run_pending()
             time.sleep(60)  # Проверяем каждую минуту
     except KeyboardInterrupt:
+
         print("\nАгрегатор остановлен пользователем")
