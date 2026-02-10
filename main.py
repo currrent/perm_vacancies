@@ -497,8 +497,8 @@ if __name__ == "__main__":
     exit_controller = GracefulExit()
     
     # Получаем токен и канал из переменных окружения
-    BOT_TOKEN = os.getenv("BOT_TOKEN", "8549288451:AAEhvxBAfrSmqUkp5zAJg-AITE_rm2-ob1Y")
-    CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "@vacancies_perm")
+    BOT_TOKEN = os.getenv("BOT_TOKEN")
+    CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME")
     
     # Создаем publisher
     publisher = TelegramChannelPublisher(BOT_TOKEN)
@@ -559,3 +559,4 @@ if __name__ == "__main__":
         print("Агрегатор завершает работу...")
         print("Спасибо за использование!")
         print("=" * 60)
+
