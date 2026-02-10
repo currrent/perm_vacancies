@@ -1,9 +1,9 @@
-from dotenv import load_dotenv
-load_dotenv()
 import os
 import sqlite3
 import requests
 import time
+from dotenv import load_dotenv
+load_dotenv()
 from datetime import datetime, timedelta
 from contextlib import contextmanager
 import schedule
@@ -405,5 +405,6 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
 
         print("\nАгрегатор остановлен пользователем")
+
 
 
