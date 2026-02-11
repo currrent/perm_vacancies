@@ -167,13 +167,13 @@ class HHruParser:
         else:
             return "Не указана"
 
-    def fetch_vacancies(self, city="Пермь", keywords=None, period_days=7):
+    def fetch_vacancies(self, city="Пермь", keywords=None, period_days=30):  # пока 30 дней
         city_id = self.get_city_id(city)
         date_from = (datetime.now() - timedelta(days=period_days)).strftime("%Y-%m-%dT%H:%M:%S")
         vacancies = []
         page = 0
         print(f"Поиск вакансий в {city} за последние {period_days} дней...")
-
+    
         try:
             while True:
                 params = {
@@ -184,18 +184,14 @@ class HHruParser:
                     "order_by": "publication_time",
                     "search_field": "name"
                 }
-                if keywords:
-                    params["text"] = keywords
-                else:
-                    params["text"] = "python OR разработчик OR программист OR java OR javascript"
-
+                # КЛЮЧЕВЫХ СЛОВ БОЛЬШЕ НЕТ — ищем ВСЁ
+    
                 print(f"  Запрос к HH: {self.base_url}")
                 print(f"  Параметры: {params}")
-
                 response = self.session.get(self.base_url, params=params, timeout=20)
                 print(f"  Статус ответа: {response.status_code}")
                 print(f"  Тело ответа (первые 300): {response.text[:300]}")
-
+            # ... остальной код без изменений
                 response.raise_for_status()
                 data = response.json()
 
@@ -471,3 +467,4 @@ if __name__ == "__main__":
         print("Агрегатор завершает работу...")
         print("Спасибо за использование!")
         print("=" * 60)
+
