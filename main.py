@@ -428,6 +428,18 @@ if __name__ == "__main__":
         print("❌ Ошибка: не задана переменная окружения CHANNEL_USERNAME")
         sys.exit(1)
 
+        # Тест доступа к HH.ru
+try:
+    test_resp = requests.get("https://api.hh.ru/vacancies?area=59&per_page=1", timeout=10)
+    print(f"Тест доступа к HH.ru: {test_resp.status_code}")
+    if test_resp.status_code == 200:
+        print("✓ HH.ru доступен")
+    else:
+        print(f"✗ HH.ru вернул статус {test_resp.status_code}")
+except Exception as e:
+    print(f"✗ Не удалось подключиться к HH.ru: {e}")
+
+
     # Инициализируем компоненты
     exit_controller = GracefulExit()
     publisher = TelegramChannelPublisher(BOT_TOKEN)
@@ -481,5 +493,6 @@ if __name__ == "__main__":
         print("Агрегатор завершает работу...")
         print("Спасибо за использование!")
         print("=" * 60)
+
 
 
