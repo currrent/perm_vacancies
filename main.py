@@ -167,13 +167,13 @@ class HHruParser:
         else:
             return "Не указана"
 
-    def fetch_vacancies(self, city="Пермь", keywords=None, period_days=3):  # пока 3 дней
+    def fetch_vacancies(self, city="Пермь", keywords=None, period_days=30):  # 30 дней для гарантии
         city_id = self.get_city_id(city)
         date_from = (datetime.now() - timedelta(days=period_days)).strftime("%Y-%m-%dT%H:%M:%S")
         vacancies = []
         page = 0
         print(f"Поиск вакансий в {city} за последние {period_days} дней...")
-    
+
         try:
             while True:
                 params = {
@@ -181,17 +181,16 @@ class HHruParser:
                     "per_page": 50,
                     "page": page,
                     "date_from": date_from,
-                    "order_by": "publication_time",
-                    "search_field": "name"
+                    "order_by": "publication_time"
+                    # search_field удалён — при пустом text он не нужен
                 }
-                # КЛЮЧЕВЫХ СЛОВ БОЛЬШЕ НЕТ — ищем ВСЁ
-    
+
                 print(f"  Запрос к HH: {self.base_url}")
                 print(f"  Параметры: {params}")
                 response = self.session.get(self.base_url, params=params, timeout=20)
                 print(f"  Статус ответа: {response.status_code}")
                 print(f"  Тело ответа (первые 300): {response.text[:300]}")
-            # ... остальной код без изменений
+
                 response.raise_for_status()
                 data = response.json()
 
@@ -340,7 +339,7 @@ def run_aggregator(publisher, channel_username, exit_controller):
         db.cleanup_old_vacancies(30)
 
     print("\nПолучаем вакансии с HH.ru...")
-    vacancies = parser.fetch_vacancies("Пермь", period_days=7)
+    vacancies = parser.fetch_vacancies("Пермь", period_days=30)  # пока 30 дней
 
     new_count = 0
     for vacancy in vacancies:
@@ -409,11 +408,15 @@ if __name__ == "__main__":
         print("❌ Ошибка: не задана переменная окружения CHANNEL_USERNAME")
         sys.exit(1)
 
+    # УСИЛЕННЫЙ ТЕСТ ДОСТУПА К HH.RU
     try:
-        test_resp = requests.get("https://api.hh.ru/vacancies?area=59&per_page=1", timeout=10)
+        test_resp = requests.get("https://api.hh.ru/vacancies?area=59&per_page=3", timeout=10)
         print(f"Тест доступа к HH.ru: {test_resp.status_code}")
+        print(f"Тело ответа (первые 500): {test_resp.text[:500]}")
         if test_resp.status_code == 200:
-            print("✓ HH.ru доступен")
+            data = test_resp.json()
+            found = data.get('found', 0)
+            print(f"✓ HH.ru доступен, найдено вакансий в Перми (всего): {found}")
         else:
             print(f"✗ HH.ru вернул статус {test_resp.status_code}")
     except Exception as e:
@@ -467,5 +470,3 @@ if __name__ == "__main__":
         print("Агрегатор завершает работу...")
         print("Спасибо за использование!")
         print("=" * 60)
-
-
