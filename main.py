@@ -139,8 +139,15 @@ class HHruParser:
         })
 
     def get_city_id(self, city_name="Пермь"):
-        cities = {'Пермь': 59, 'Москва': 1, 'Санкт-Петербург': 2, 'Екатеринбург': 3,
-                  'Новосибирск': 4, 'Казань': 88, 'Нижний Новгород': 66}
+        cities = {
+            'Пермь': 59,
+            'Москва': 1,
+            'Санкт-Петербург': 2,
+            'Екатеринбург': 3,
+            'Новосибирск': 4,
+            'Казань': 88,
+            'Нижний Новгород': 66,
+        }
         return cities.get(city_name, 59)
 
     def format_salary(self, salary_data):
@@ -182,12 +189,11 @@ class HHruParser:
                 else:
                     params["text"] = "python OR разработчик OR программист OR java OR javascript"
 
-                # 🔍 ОТЛАДКА
                 print(f"  Запрос к HH: {self.base_url}")
                 print(f"  Параметры: {params}")
 
                 response = self.session.get(self.base_url, params=params, timeout=20)
-    def fetch_vacancies(self, city="Пермь", keywords=None, period_days=7):
+                print(f"  Статус ответа: {response.status_code}")
                 print(f"  Тело ответа (первые 300): {response.text[:300]}")
 
                 response.raise_for_status()
@@ -338,7 +344,7 @@ def run_aggregator(publisher, channel_username, exit_controller):
         db.cleanup_old_vacancies(30)
 
     print("\nПолучаем вакансии с HH.ru...")
-    vacancies = parser.fetch_vacancies("Пермь", period_days=7)  # ← 7 дней для гарантии
+    vacancies = parser.fetch_vacancies("Пермь", period_days=7)
 
     new_count = 0
     for vacancy in vacancies:
@@ -407,7 +413,6 @@ if __name__ == "__main__":
         print("❌ Ошибка: не задана переменная окружения CHANNEL_USERNAME")
         sys.exit(1)
 
-    # ✅ ТЕСТ ДОСТУПА К HH.RU
     try:
         test_resp = requests.get("https://api.hh.ru/vacancies?area=59&per_page=1", timeout=10)
         print(f"Тест доступа к HH.ru: {test_resp.status_code}")
@@ -466,4 +471,3 @@ if __name__ == "__main__":
         print("Агрегатор завершает работу...")
         print("Спасибо за использование!")
         print("=" * 60)
-
