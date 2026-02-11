@@ -187,7 +187,7 @@ class HHruParser:
                 print(f"  Параметры: {params}")
 
                 response = self.session.get(self.base_url, params=params, timeout=20)
-                print(f"  Статус ответа: {response.status_code}")
+    def fetch_vacancies(self, city="Пермь", keywords=None, period_days=7):
                 print(f"  Тело ответа (первые 300): {response.text[:300]}")
 
                 response.raise_for_status()
@@ -466,3 +466,4 @@ if __name__ == "__main__":
         print("Агрегатор завершает работу...")
         print("Спасибо за использование!")
         print("=" * 60)
+
