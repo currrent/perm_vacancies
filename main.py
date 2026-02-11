@@ -187,69 +187,44 @@ class HHruParser:
         else:
             return "Не указана"
 
-    def fetch_vacancies(self, city="Пермь", keywords=None, period_days=7):
-        """Получает вакансии за последние N дней (без жёстких фильтров по опыту/занятости)"""
-        city_id = self.get_city_id(city)
-        date_from = (datetime.now() - timedelta(days=period_days)).strftime("%Y-%m-%dT%H:%M:%S")
+   def fetch_vacancies(self, city="Пермь", keywords=None, period_days=1):
+    city_id = self.get_city_id(city)
+    date_from = (datetime.now() - timedelta(days=period_days)).strftime("%Y-%m-%dT%H:%M:%S")
 
-        vacancies = []
-        page = 0
-        print(f"Поиск вакансий в {city} за последние {period_days} дней...")
+    vacancies = []
+    page = 0
+    print(f"Поиск вакансий в {city} за последние {period_days} дней...")
 
-        try:
-            while True:
-                params = {
-                    "area": city_id,
-                    "per_page": 50,
-                    "page": page,
-                    "date_from": date_from,
-                    "order_by": "publication_time",
-                    "search_field": "name",
-                    # Фильтры опыта и занятости убраны, чтобы получать больше результатов
-                    # При необходимости можно добавить позже
-                }
+    try:
+        while True:
+            params = {
+                "area": city_id,
+                "per_page": 50,
+                "page": page,
+                "date_from": date_from,
+                "order_by": "publication_time",
+                "search_field": "name",
+                # временно убрали фильтры
+            }
+            if keywords:
+                params["text"] = keywords
+            else:
+                params["text"] = "python OR разработчик OR программист"
 
-                if keywords:
-                    params["text"] = keywords
-                else:
-                    # Упрощённый, но эффективный запрос для IT-вакансий
-                    params["text"] = "python OR разработчик OR программист OR java OR javascript"
+            # 🔍 ОТЛАДКА
+            print(f"  Запрос к HH: {self.base_url}")
+            print(f"  Параметры: {params}")
 
-                response = self.session.get(self.base_url, params=params, timeout=20)
-                response.raise_for_status()
-                data = response.json()
+            response = self.session.get(self.base_url, params=params, timeout=20)
 
-                items = data.get("items", [])
-                if not items:
-                    break
+            # 🔍 ОТЛАДКА
+            print(f"  Статус ответа: {response.status_code}")
+            # Показываем первые 300 символов ответа (там JSON)
+            print(f"  Тело ответа (первые 300): {response.text[:300]}")
 
-                for item in items:
-                    if not item.get("name"):
-                        continue
-                    vacancy = {
-                        "id": str(item["id"]),
-                        "title": item.get("name", "").strip(),
-                        "company": item.get("employer", {}).get("name", "").strip(),
-                        "salary": self.format_salary(item.get("salary")),
-                        "url": item.get("alternate_url", f"https://hh.ru/vacancy/{item['id']}"),
-                        "published_at": item.get("published_at", ""),
-                        "source": "hh.ru",
-                        "city": item.get("area", {}).get("name", city)
-                    }
-                    vacancies.append(vacancy)
-
-                print(f"  Страница {page + 1}: найдено {len(items)} вакансий")
-                pages = data.get("pages", 0)
-                page += 1
-                if page >= pages or page >= 5:  # максимум 5 страниц
-                    break
-                time.sleep(0.5)
-
-        except Exception as e:
-            print(f"  Ошибка при парсинге HH.ru: {e}")
-
-        print(f"Всего найдено {len(vacancies)} вакансий в {city}")
-        return vacancies
+            response.raise_for_status()
+            data = response.json()
+            # ... остальной код
 
 
 class VacancyDatabase:
@@ -375,7 +350,7 @@ def run_aggregator(publisher, channel_username, exit_controller):
 
     # Получаем новые вакансии (за последние 1 день, но при первом запуске можно увеличить)
     print("\nПолучаем вакансии с HH.ru...")
-    vacancies = parser.fetch_vacancies("Пермь", period_days=1)  # для теста можно поставить 3
+    vacancies = parser.fetch_vacancies("Пермь", period_days=7)  # для теста можно поставить 3
 
     # Сохраняем новые
     new_count = 0
@@ -506,4 +481,5 @@ if __name__ == "__main__":
         print("Агрегатор завершает работу...")
         print("Спасибо за использование!")
         print("=" * 60)
+
 
