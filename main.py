@@ -167,7 +167,7 @@ class HHruParser:
         else:
             return "Не указана"
 
-    def fetch_vacancies(self, city="Пермь", keywords=None, period_days=30):  # пока 30 дней
+    def fetch_vacancies(self, city="Пермь", keywords=None, period_days=3):  # пока 3 дней
         city_id = self.get_city_id(city)
         date_from = (datetime.now() - timedelta(days=period_days)).strftime("%Y-%m-%dT%H:%M:%S")
         vacancies = []
@@ -467,4 +467,5 @@ if __name__ == "__main__":
         print("Агрегатор завершает работу...")
         print("Спасибо за использование!")
         print("=" * 60)
+
 
