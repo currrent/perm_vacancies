@@ -350,7 +350,7 @@ def run_aggregator(publisher, channel_username, exit_controller):
             new_count += 1
     print(f"\nНовых вакансий сохранено в БД: {new_count}")
 
-    unposted = db.get_unposted_vacancies(5)
+    unposted = db.get_unposted_vacancies(20)
     print(f"Найдено неопубликованных вакансий: {len(unposted)}")
 
     if unposted:
@@ -471,6 +471,7 @@ if __name__ == "__main__":
         print("Агрегатор завершает работу...")
         print("Спасибо за использование!")
         print("=" * 60)
+
 
 
 
