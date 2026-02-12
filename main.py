@@ -52,7 +52,8 @@ class TelegramChannelPublisher:
             "chat_id": channel_username,
             "text": message,
             "parse_mode": "HTML",
-            "disable_web_page_preview": False
+            "disable_web_page_preview": False,
+            "disable_notification": True
         }
 
         for attempt in range(retry_count):
@@ -470,5 +471,6 @@ if __name__ == "__main__":
         print("Агрегатор завершает работу...")
         print("Спасибо за использование!")
         print("=" * 60)
+
 
 
