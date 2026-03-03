@@ -4,9 +4,11 @@ import requests
 import time
 import signal
 import sys
+import random  # <-- ДОБАВЛЕНО
 from datetime import datetime, timedelta
 from contextlib import contextmanager
-import schedule
+
+# import schedule  <-- УДАЛЕНО (больше не нужен)
 
 
 class GracefulExit:
@@ -168,7 +170,7 @@ class HHruParser:
         else:
             return "Не указана"
 
-    def fetch_vacancies(self, city="Пермь", keywords=None, period_days=30):  # 30 дней для гарантии
+    def fetch_vacancies(self, city="Пермь", keywords=None, period_days=30):
         city_id = self.get_city_id(city)
         date_from = (datetime.now() - timedelta(days=period_days)).strftime("%Y-%m-%dT%H:%M:%S")
         vacancies = []
@@ -183,7 +185,6 @@ class HHruParser:
                     "page": page,
                     "date_from": date_from,
                     "order_by": "publication_time"
-                    # search_field удалён — при пустом text он не нужен
                 }
 
                 print(f"  Запрос к HH: {self.base_url}")
@@ -340,7 +341,7 @@ def run_aggregator(publisher, channel_username, exit_controller):
         db.cleanup_old_vacancies(30)
 
     print("\nПолучаем вакансии с HH.ru...")
-    vacancies = parser.fetch_vacancies("Пермь", period_days=30)  # пока 30 дней
+    vacancies = parser.fetch_vacancies("Пермь", period_days=30)
 
     new_count = 0
     for vacancy in vacancies:
@@ -350,7 +351,10 @@ def run_aggregator(publisher, channel_username, exit_controller):
             new_count += 1
     print(f"\nНовых вакансий сохранено в БД: {new_count}")
 
-    unposted = db.get_unposted_vacancies(20)
+    # --- ИЗМЕНЕНИЕ: случайное количество вакансий от 11 до 22 ---
+    limit = random.randint(11, 22)
+    print(f"Будет запрошено до {limit} неопубликованных вакансий")
+    unposted = db.get_unposted_vacancies(limit)
     print(f"Найдено неопубликованных вакансий: {len(unposted)}")
 
     if unposted:
@@ -442,28 +446,56 @@ if __name__ == "__main__":
 
     print("\nПервый запуск...")
     try:
-        job(publisher, CHANNEL_USERNAME, exit_controller)
+        job_success = job(publisher, CHANNEL_USERNAME, exit_controller)
     except Exception as e:
         print(f"Ошибка при первом запуске: {e}")
+        job_success = False
 
-    schedule.every(4).hours.do(lambda: job(publisher, CHANNEL_USERNAME, exit_controller))
+    # --- ИЗМЕНЕНИЕ: ручное планирование со случайным интервалом ---
+    # После первого запуска вычисляем случайное время ожидания до следующего (от 1 до 4 часов)
+    if not exit_controller.exit_now:
+        # Генерируем случайный интервал в секундах
+        interval_seconds = random.randint(3600, 14400)  # 1–4 часа
+        next_run = datetime.now() + timedelta(seconds=interval_seconds)
+        print(f"\nСледующий запуск через {interval_seconds // 3600} ч {interval_seconds % 3600 // 60} мин")
+        print(f"Ожидание до {next_run.strftime('%Y-%m-%d %H:%M:%S')}")
+    else:
+        next_run = None
 
     print("\n" + "=" * 60)
-    print("Агрегатор запущен. Расписание: каждые 4 часа")
+    print("Агрегатор запущен. Интервал между запусками: случайный 1–4 часа")
     print("Для остановки нажмите Ctrl+C\n")
 
-    last_run = datetime.now()
+    last_status_print = datetime.now()
+
     try:
         while not exit_controller.exit_now:
-            schedule.run_pending()
-            current_time = datetime.now()
-            if (current_time - last_run).seconds > 300:
-                print(f"[{current_time.strftime('%H:%M:%S')}] Ожидание следующего запуска...")
-                last_run = current_time
-            for _ in range(60):
-                if exit_controller.exit_now:
-                    break
-                time.sleep(1)
+            # Проверяем, наступило ли время следующего запуска
+            if next_run and datetime.now() >= next_run:
+                print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Наступило время запуска.")
+                job_success = job(publisher, CHANNEL_USERNAME, exit_controller)
+
+                if not exit_controller.exit_now:
+                    # Пересчитываем следующий интервал
+                    interval_seconds = random.randint(3600, 14400)
+                    next_run = datetime.now() + timedelta(seconds=interval_seconds)
+                    print(f"\nСледующий запуск через {interval_seconds // 3600} ч {interval_seconds % 3600 // 60} мин")
+                    print(f"Ожидание до {next_run.strftime('%Y-%m-%d %H:%M:%S')}")
+                    last_status_print = datetime.now()  # сбросим таймер печати статуса
+
+            # Печатаем "пульс" раз в 5 минут, чтобы было видно, что скрипт жив
+            now = datetime.now()
+            if (now - last_status_print).seconds > 300:
+                if next_run:
+                    remaining = (next_run - now).total_seconds()
+                    if remaining > 0:
+                        hours = int(remaining // 3600)
+                        minutes = int((remaining % 3600) // 60)
+                        print(f"[{now.strftime('%H:%M:%S')}] До следующего запуска: {hours} ч {minutes} мин")
+                last_status_print = now
+
+            time.sleep(1)  # ждём 1 секунду перед новой проверкой
+
     except KeyboardInterrupt:
         print("\nПолучен сигнал прерывания...")
     finally:
@@ -471,7 +503,3 @@ if __name__ == "__main__":
         print("Агрегатор завершает работу...")
         print("Спасибо за использование!")
         print("=" * 60)
-
-
-
-
