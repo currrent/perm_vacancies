@@ -8,12 +8,19 @@ import random
 import json
 from datetime import datetime, timedelta
 from contextlib import contextmanager
-from urllib.parse import urlencode, urlparse, parse_qs
+from urllib.parse import urlencode
+from dotenv import load_dotenv
 
-# ===================== OAuth для HH.ru =====================
+load_dotenv()  # загружаем переменные из .env
+
+# ===================================================================
+# Класс для управления токенами HH.ru
+# Поддерживает: статический токен (HH_ACCESS_TOKEN),
+#               client_credentials (токен приложения),
+#               OAuth-поток пользователя (как запасной вариант)
+# ===================================================================
 class HHOAuth:
-    """Управление OAuth-токенами для HH.ru (Authorization Code Flow)."""
-    def __init__(self, client_id, client_secret, redirect_uri, token_file='hh_token.json'):
+    def __init__(self, client_id=None, client_secret=None, redirect_uri=None, token_file='hh_token.json'):
         self.client_id = client_id
         self.client_secret = client_secret
         self.redirect_uri = redirect_uri
@@ -21,8 +28,48 @@ class HHOAuth:
         self.token_data = None
         self._load_token()
 
+        # 1. Если есть статический токен из переменной окружения – используем его
+        static_token = os.getenv('HH_ACCESS_TOKEN')
+        if static_token:
+            print("✓ Используется постоянный токен из переменной HH_ACCESS_TOKEN")
+            self.token_data = {
+                'access_token': static_token,
+                'created_at': datetime.now().isoformat(),
+                'expires_in': 86400 * 365
+            }
+            self._save_token(self.token_data)
+            return
+
+        # 2. Если нет сохранённого токена, но есть Client ID и Secret – пробуем получить токен приложения
+        if not self.token_data and self.client_id and self.client_secret:
+            print("Попытка получить токен приложения (client_credentials)...")
+            try:
+                self._obtain_client_credentials_token()
+                print("✓ Токен приложения успешно получен и сохранён.")
+                return
+            except Exception as e:
+                print(f"✗ Не удалось получить токен приложения: {e}")
+
+        # 3. Если ничего не вышло – токен отсутствует, позже будет запрошен OAuth-поток
+        if not self.token_data:
+            print("Токен не найден. Придётся пройти OAuth-авторизацию пользователя.")
+
+    def _obtain_client_credentials_token(self):
+        """Получение токена через client_credentials (для приложений)."""
+        url = 'https://api.hh.ru/token'
+        data = {
+            'grant_type': 'client_credentials',
+            'client_id': self.client_id,
+            'client_secret': self.client_secret
+        }
+        resp = requests.post(url, data=data, timeout=10)
+        if resp.status_code != 200:
+            raise Exception(f"Ошибка получения токена: {resp.status_code} {resp.text}")
+        token_data = resp.json()
+        token_data['created_at'] = datetime.now().isoformat()
+        self._save_token(token_data)
+
     def _load_token(self):
-        """Загружает токен из файла."""
         if os.path.exists(self.token_file):
             try:
                 with open(self.token_file, 'r') as f:
@@ -31,23 +78,21 @@ class HHOAuth:
                 self.token_data = None
 
     def _save_token(self, token_data):
-        """Сохраняет токен в файл."""
         with open(self.token_file, 'w') as f:
             json.dump(token_data, f, indent=2)
         self.token_data = token_data
 
     def get_authorization_url(self):
-        """Возвращает URL для получения кода авторизации."""
         params = {
             'client_id': self.client_id,
             'redirect_uri': self.redirect_uri,
-            'response_type': 'code'
+            'response_type': 'code',
+            'scope': 'vacancies'
         }
         return 'https://hh.ru/oauth/authorize?' + urlencode(params)
 
     def exchange_code(self, code):
-        """Обменивает код авторизации на токены."""
-        url = 'https://hh.ru/oauth/token'
+        url = 'https://api.hh.ru/token'
         data = {
             'grant_type': 'authorization_code',
             'client_id': self.client_id,
@@ -58,27 +103,30 @@ class HHOAuth:
         resp = requests.post(url, data=data, timeout=10)
         resp.raise_for_status()
         token_data = resp.json()
-        # HH возвращает access_token, refresh_token, expires_in
         token_data['created_at'] = datetime.now().isoformat()
         self._save_token(token_data)
         return token_data
 
     def get_access_token(self):
-        """Возвращает действующий access_token, при необходимости обновляет."""
         if not self.token_data:
-            raise Exception("Токен отсутствует. Сначала выполните авторизацию.")
-        # Проверяем, истёк ли токен (с запасом 5 минут)
+            raise Exception("Токен отсутствует. Выполните авторизацию.")
         created_at = datetime.fromisoformat(self.token_data['created_at'])
         expires_in = self.token_data.get('expires_in', 3600)
         if (datetime.now() - created_at).seconds > expires_in - 300:
-            self._refresh_token()
+            if 'refresh_token' in self.token_data:
+                self._refresh_token()
+            else:
+                # Для client_credentials токен не обновляется, перезапрашиваем
+                if self.client_id and self.client_secret:
+                    self._obtain_client_credentials_token()
+                else:
+                    raise Exception("Токен истёк, а обновить нечем.")
         return self.token_data['access_token']
 
     def _refresh_token(self):
-        """Обновляет токен с помощью refresh_token."""
         if 'refresh_token' not in self.token_data:
             raise Exception("Нет refresh_token для обновления.")
-        url = 'https://hh.ru/oauth/token'
+        url = 'https://api.hh.ru/token'
         data = {
             'grant_type': 'refresh_token',
             'refresh_token': self.token_data['refresh_token'],
@@ -88,11 +136,16 @@ class HHOAuth:
         resp = requests.post(url, data=data, timeout=10)
         resp.raise_for_status()
         new_data = resp.json()
-        # сохраняем новые токены, обновляем created_at
         new_data['created_at'] = datetime.now().isoformat()
         self._save_token(new_data)
 
-# ===================== Основные классы =====================
+
+# ===================================================================
+# Остальные классы (GracefulExit, TelegramChannelPublisher,
+# HHruParser, VacancyDatabase) – без изменений, но с поддержкой
+# режима без авторизации (HH_NO_AUTH=true)
+# ===================================================================
+
 class GracefulExit:
     def __init__(self):
         self.exit_now = False
@@ -102,6 +155,7 @@ class GracefulExit:
     def signal_handler(self, signum, frame):
         print(f"\nПолучен сигнал {signum}. Завершаю работу...")
         self.exit_now = True
+
 
 class TelegramChannelPublisher:
     def __init__(self, bot_token):
@@ -213,19 +267,27 @@ class TelegramChannelPublisher:
 """
         return message.strip()
 
+
 class HHruParser:
-    def __init__(self, oauth):
-        self.oauth = oauth  # объект HHOAuth
+    def __init__(self, oauth=None):
+        self.oauth = oauth
         self.base_url = "https://api.hh.ru/vacancies"
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         })
+        # Проверяем, нужно ли отключить авторизацию
+        self.no_auth = os.getenv('HH_NO_AUTH', 'false').lower() == 'true'
+        if self.no_auth:
+            print("⚠️ Работаем без авторизации (публичное API)")
 
     def _get_auth_headers(self):
-        """Возвращает заголовки с актуальным access_token."""
-        token = self.oauth.get_access_token()
-        return {'Authorization': f'Bearer {token}'}
+        if self.no_auth:
+            return {}
+        if self.oauth:
+            token = self.oauth.get_access_token()
+            return {'Authorization': f'Bearer {token}'}
+        return {}
 
     def get_city_id(self, city_name="Пермь"):
         cities = {
@@ -273,7 +335,6 @@ class HHruParser:
                     "order_by": "publication_time"
                 }
 
-                # Добавляем авторизационный заголовок
                 headers = self.session.headers.copy()
                 headers.update(self._get_auth_headers())
 
@@ -282,12 +343,19 @@ class HHruParser:
                 response = self.session.get(self.base_url, params=params, headers=headers, timeout=20)
                 print(f"  Статус ответа: {response.status_code}")
 
-                if response.status_code == 401:
-                    # Токен истёк, пытаемся обновить
-                    print("  Токен истёк, обновляем...")
-                    self.oauth._refresh_token()
-                    headers.update(self._get_auth_headers())
-                    response = self.session.get(self.base_url, params=params, headers=headers, timeout=20)
+                if response.status_code == 403:
+                    print("  Тело ошибки (первые 500 символов):")
+                    print(response.text[:500])
+                    # Если 403, можно попытаться обновить токен (если есть OAuth)
+                    if self.oauth and not self.no_auth:
+                        try:
+                            print("  Пытаемся обновить токен...")
+                            self.oauth.get_access_token()  # обновит при необходимости
+                            headers.update(self._get_auth_headers())
+                            response = self.session.get(self.base_url, params=params, headers=headers, timeout=20)
+                            print(f"  Повторный статус: {response.status_code}")
+                        except Exception as e:
+                            print(f"  Ошибка обновления токена: {e}")
 
                 response.raise_for_status()
                 data = response.json()
@@ -323,6 +391,7 @@ class HHruParser:
 
         print(f"Всего найдено {len(vacancies)} вакансий в {city}")
         return vacancies
+
 
 class VacancyDatabase:
     def __init__(self, db_file="vacancies.db"):
@@ -416,6 +485,11 @@ class VacancyDatabase:
             cursor.execute("UPDATE vacancies SET posted_to_channel = 1 WHERE id = ?", (vacancy_id,))
             conn.commit()
 
+
+# ===================================================================
+# Функции выполнения и планирования
+# ===================================================================
+
 def run_aggregator(publisher, parser, channel_username, exit_controller):
     print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Запуск агрегатора...")
     print(f"Используется канал: {channel_username}")
@@ -476,6 +550,7 @@ def run_aggregator(publisher, parser, channel_username, exit_controller):
     print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Завершено!")
     return True
 
+
 def job(publisher, parser, channel_username, exit_controller):
     try:
         return run_aggregator(publisher, parser, channel_username, exit_controller)
@@ -489,7 +564,11 @@ def job(publisher, parser, channel_username, exit_controller):
         traceback.print_exc()
         return False
 
-# ===================== Основной блок =====================
+
+# ===================================================================
+# Основной блок
+# ===================================================================
+
 if __name__ == "__main__":
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Запуск агрегатора вакансий...")
     print("=" * 60)
@@ -504,33 +583,36 @@ if __name__ == "__main__":
         print("❌ Ошибка: не задана переменная окружения CHANNEL_USERNAME")
         sys.exit(1)
 
-    # OAuth данные
-    CLIENT_ID = "PAQBVPK3OPLB7TGUNM5GPM6U0A06QCAB25FLE5P2UC9UA2R968KFN9PPET33CTHI"
-    CLIENT_SECRET = "JTTPBU6CMP3RCTSEMRSNI9L2AMBVONR5J5C065BIKA77O18EO0KFSVIS7BQTT4VP"
+    # Данные приложения HH.ru
+    CLIENT_ID = "OHSE6CI5L53K2N3L22MTQR9K63ITDS0I4UDFLCFGT3FPJAKJMGSJF77DSE8LJ4SL"
+    CLIENT_SECRET = "R6B3SLIEKJ1KGLVDN6T8UGBSJ4NE3E1H3GV0DHIJ0R6TLJBJ27M3QM50OS1PC0C0"
     REDIRECT_URI = "https://t.me/vacancies_perm"
 
-    # Инициализация OAuth
-    oauth = HHOAuth(CLIENT_ID, CLIENT_SECRET, REDIRECT_URI)
+    # Если включён режим без авторизации – создаём парсер без OAuth
+    if os.getenv('HH_NO_AUTH', 'false').lower() == 'true':
+        parser = HHruParser(oauth=None)
+    else:
+        # Инициализация OAuth
+        oauth = HHOAuth(CLIENT_ID, CLIENT_SECRET, REDIRECT_URI)
 
-    # Проверка наличия токена и авторизация при необходимости
-    if not oauth.token_data:
-        print("Токен не найден. Необходимо выполнить авторизацию.")
-        print("1. Перейдите по ссылке:")
-        print(oauth.get_authorization_url())
-        print("2. Авторизуйтесь и разрешите доступ.")
-        print("3. После редиректа скопируйте параметр 'code' из адресной строки.")
-        code = input("Введите полученный код: ").strip()
-        try:
-            oauth.exchange_code(code)
-            print("✓ Токен успешно получен и сохранён.")
-        except Exception as e:
-            print(f"✗ Ошибка обмена кода: {e}")
-            sys.exit(1)
+        # Если токен ещё не получен, предлагаем OAuth-поток пользователя
+        if not oauth.token_data:
+            print("Токен не найден. Необходимо выполнить авторизацию.")
+            print("1. Перейдите по ссылке:")
+            print(oauth.get_authorization_url())
+            print("2. Авторизуйтесь и разрешите доступ.")
+            print("3. После редиректа скопируйте параметр 'code' из адресной строки.")
+            code = input("Введите полученный код: ").strip()
+            try:
+                oauth.exchange_code(code)
+                print("✓ Токен успешно получен и сохранён.")
+            except Exception as e:
+                print(f"✗ Ошибка обмена кода: {e}")
+                sys.exit(1)
 
-    # Создаём парсер с OAuth
-    parser = HHruParser(oauth)
+        parser = HHruParser(oauth)
 
-    # Тест доступа к HH.ru с авторизацией
+    # Тест доступа к HH.ru
     try:
         test_headers = parser.session.headers.copy()
         test_headers.update(parser._get_auth_headers())
@@ -543,9 +625,12 @@ if __name__ == "__main__":
         if test_resp.status_code == 200:
             data = test_resp.json()
             found = data.get('found', 0)
-            print(f"✓ HH.ru доступен (авторизован), найдено вакансий в Перми (всего): {found}")
+            print(f"✓ HH.ru доступен, найдено вакансий в Перми (всего): {found}")
         else:
             print(f"✗ HH.ru вернул статус {test_resp.status_code}")
+            if test_resp.status_code == 403:
+                print("  Тело ошибки (первые 500 символов):")
+                print(test_resp.text[:500])
     except Exception as e:
         print(f"✗ Не удалось подключиться к HH.ru: {e}")
 
