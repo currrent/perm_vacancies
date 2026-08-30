@@ -4,13 +4,95 @@ import requests
 import time
 import signal
 import sys
-import random  # <-- ДОБАВЛЕНО
+import random
+import json
 from datetime import datetime, timedelta
 from contextlib import contextmanager
+from urllib.parse import urlencode, urlparse, parse_qs
 
-# import schedule  <-- УДАЛЕНО (больше не нужен)
+# ===================== OAuth для HH.ru =====================
+class HHOAuth:
+    """Управление OAuth-токенами для HH.ru (Authorization Code Flow)."""
+    def __init__(self, client_id, client_secret, redirect_uri, token_file='hh_token.json'):
+        self.client_id = client_id
+        self.client_secret = client_secret
+        self.redirect_uri = redirect_uri
+        self.token_file = token_file
+        self.token_data = None
+        self._load_token()
 
+    def _load_token(self):
+        """Загружает токен из файла."""
+        if os.path.exists(self.token_file):
+            try:
+                with open(self.token_file, 'r') as f:
+                    self.token_data = json.load(f)
+            except:
+                self.token_data = None
 
+    def _save_token(self, token_data):
+        """Сохраняет токен в файл."""
+        with open(self.token_file, 'w') as f:
+            json.dump(token_data, f, indent=2)
+        self.token_data = token_data
+
+    def get_authorization_url(self):
+        """Возвращает URL для получения кода авторизации."""
+        params = {
+            'client_id': self.client_id,
+            'redirect_uri': self.redirect_uri,
+            'response_type': 'code'
+        }
+        return 'https://hh.ru/oauth/authorize?' + urlencode(params)
+
+    def exchange_code(self, code):
+        """Обменивает код авторизации на токены."""
+        url = 'https://hh.ru/oauth/token'
+        data = {
+            'grant_type': 'authorization_code',
+            'client_id': self.client_id,
+            'client_secret': self.client_secret,
+            'redirect_uri': self.redirect_uri,
+            'code': code
+        }
+        resp = requests.post(url, data=data, timeout=10)
+        resp.raise_for_status()
+        token_data = resp.json()
+        # HH возвращает access_token, refresh_token, expires_in
+        token_data['created_at'] = datetime.now().isoformat()
+        self._save_token(token_data)
+        return token_data
+
+    def get_access_token(self):
+        """Возвращает действующий access_token, при необходимости обновляет."""
+        if not self.token_data:
+            raise Exception("Токен отсутствует. Сначала выполните авторизацию.")
+        # Проверяем, истёк ли токен (с запасом 5 минут)
+        created_at = datetime.fromisoformat(self.token_data['created_at'])
+        expires_in = self.token_data.get('expires_in', 3600)
+        if (datetime.now() - created_at).seconds > expires_in - 300:
+            self._refresh_token()
+        return self.token_data['access_token']
+
+    def _refresh_token(self):
+        """Обновляет токен с помощью refresh_token."""
+        if 'refresh_token' not in self.token_data:
+            raise Exception("Нет refresh_token для обновления.")
+        url = 'https://hh.ru/oauth/token'
+        data = {
+            'grant_type': 'refresh_token',
+            'refresh_token': self.token_data['refresh_token'],
+            'client_id': self.client_id,
+            'client_secret': self.client_secret
+        }
+        resp = requests.post(url, data=data, timeout=10)
+        resp.raise_for_status()
+        new_data = resp.json()
+        # сохраняем новые токены, обновляем created_at
+        new_data['created_at'] = datetime.now().isoformat()
+        self._save_token(new_data)
+
+# ===================== Основные классы =====================
 class GracefulExit:
     def __init__(self):
         self.exit_now = False
@@ -20,7 +102,6 @@ class GracefulExit:
     def signal_handler(self, signum, frame):
         print(f"\nПолучен сигнал {signum}. Завершаю работу...")
         self.exit_now = True
-
 
 class TelegramChannelPublisher:
     def __init__(self, bot_token):
@@ -132,14 +213,19 @@ class TelegramChannelPublisher:
 """
         return message.strip()
 
-
 class HHruParser:
-    def __init__(self):
+    def __init__(self, oauth):
+        self.oauth = oauth  # объект HHOAuth
         self.base_url = "https://api.hh.ru/vacancies"
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         })
+
+    def _get_auth_headers(self):
+        """Возвращает заголовки с актуальным access_token."""
+        token = self.oauth.get_access_token()
+        return {'Authorization': f'Bearer {token}'}
 
     def get_city_id(self, city_name="Пермь"):
         cities = {
@@ -187,11 +273,21 @@ class HHruParser:
                     "order_by": "publication_time"
                 }
 
+                # Добавляем авторизационный заголовок
+                headers = self.session.headers.copy()
+                headers.update(self._get_auth_headers())
+
                 print(f"  Запрос к HH: {self.base_url}")
                 print(f"  Параметры: {params}")
-                response = self.session.get(self.base_url, params=params, timeout=20)
+                response = self.session.get(self.base_url, params=params, headers=headers, timeout=20)
                 print(f"  Статус ответа: {response.status_code}")
-                print(f"  Тело ответа (первые 300): {response.text[:300]}")
+
+                if response.status_code == 401:
+                    # Токен истёк, пытаемся обновить
+                    print("  Токен истёк, обновляем...")
+                    self.oauth._refresh_token()
+                    headers.update(self._get_auth_headers())
+                    response = self.session.get(self.base_url, params=params, headers=headers, timeout=20)
 
                 response.raise_for_status()
                 data = response.json()
@@ -227,7 +323,6 @@ class HHruParser:
 
         print(f"Всего найдено {len(vacancies)} вакансий в {city}")
         return vacancies
-
 
 class VacancyDatabase:
     def __init__(self, db_file="vacancies.db"):
@@ -321,8 +416,7 @@ class VacancyDatabase:
             cursor.execute("UPDATE vacancies SET posted_to_channel = 1 WHERE id = ?", (vacancy_id,))
             conn.commit()
 
-
-def run_aggregator(publisher, channel_username, exit_controller):
+def run_aggregator(publisher, parser, channel_username, exit_controller):
     print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Запуск агрегатора...")
     print(f"Используется канал: {channel_username}")
 
@@ -331,7 +425,6 @@ def run_aggregator(publisher, channel_username, exit_controller):
         return False
 
     db = VacancyDatabase()
-    parser = HHruParser()
 
     if not publisher.check_bot():
         print("Ошибка: бот не работает. Проверьте токен.")
@@ -351,7 +444,6 @@ def run_aggregator(publisher, channel_username, exit_controller):
             new_count += 1
     print(f"\nНовых вакансий сохранено в БД: {new_count}")
 
-    # --- ИЗМЕНЕНИЕ: случайное количество вакансий от 11 до 22 ---
     limit = random.randint(11, 22)
     print(f"Будет запрошено до {limit} неопубликованных вакансий")
     unposted = db.get_unposted_vacancies(limit)
@@ -384,10 +476,9 @@ def run_aggregator(publisher, channel_username, exit_controller):
     print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Завершено!")
     return True
 
-
-def job(publisher, channel_username, exit_controller):
+def job(publisher, parser, channel_username, exit_controller):
     try:
-        return run_aggregator(publisher, channel_username, exit_controller)
+        return run_aggregator(publisher, parser, channel_username, exit_controller)
     except KeyboardInterrupt:
         print("Задача прервана пользователем")
         exit_controller.exit_now = True
@@ -398,7 +489,7 @@ def job(publisher, channel_username, exit_controller):
         traceback.print_exc()
         return False
 
-
+# ===================== Основной блок =====================
 if __name__ == "__main__":
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Запуск агрегатора вакансий...")
     print("=" * 60)
@@ -413,15 +504,46 @@ if __name__ == "__main__":
         print("❌ Ошибка: не задана переменная окружения CHANNEL_USERNAME")
         sys.exit(1)
 
-    # УСИЛЕННЫЙ ТЕСТ ДОСТУПА К HH.RU
+    # OAuth данные
+    CLIENT_ID = "PAQBVPK3OPLB7TGUNM5GPM6U0A06QCAB25FLE5P2UC9UA2R968KFN9PPET33CTHI"
+    CLIENT_SECRET = "JTTPBU6CMP3RCTSEMRSNI9L2AMBVONR5J5C065BIKA77O18EO0KFSVIS7BQTT4VP"
+    REDIRECT_URI = "https://t.me/vacancies_perm"
+
+    # Инициализация OAuth
+    oauth = HHOAuth(CLIENT_ID, CLIENT_SECRET, REDIRECT_URI)
+
+    # Проверка наличия токена и авторизация при необходимости
+    if not oauth.token_data:
+        print("Токен не найден. Необходимо выполнить авторизацию.")
+        print("1. Перейдите по ссылке:")
+        print(oauth.get_authorization_url())
+        print("2. Авторизуйтесь и разрешите доступ.")
+        print("3. После редиректа скопируйте параметр 'code' из адресной строки.")
+        code = input("Введите полученный код: ").strip()
+        try:
+            oauth.exchange_code(code)
+            print("✓ Токен успешно получен и сохранён.")
+        except Exception as e:
+            print(f"✗ Ошибка обмена кода: {e}")
+            sys.exit(1)
+
+    # Создаём парсер с OAuth
+    parser = HHruParser(oauth)
+
+    # Тест доступа к HH.ru с авторизацией
     try:
-        test_resp = requests.get("https://api.hh.ru/vacancies?area=59&per_page=3", timeout=10)
+        test_headers = parser.session.headers.copy()
+        test_headers.update(parser._get_auth_headers())
+        test_resp = requests.get(
+            "https://api.hh.ru/vacancies?area=59&per_page=3",
+            headers=test_headers,
+            timeout=10
+        )
         print(f"Тест доступа к HH.ru: {test_resp.status_code}")
-        print(f"Тело ответа (первые 500): {test_resp.text[:500]}")
         if test_resp.status_code == 200:
             data = test_resp.json()
             found = data.get('found', 0)
-            print(f"✓ HH.ru доступен, найдено вакансий в Перми (всего): {found}")
+            print(f"✓ HH.ru доступен (авторизован), найдено вакансий в Перми (всего): {found}")
         else:
             print(f"✗ HH.ru вернул статус {test_resp.status_code}")
     except Exception as e:
@@ -446,16 +568,14 @@ if __name__ == "__main__":
 
     print("\nПервый запуск...")
     try:
-        job_success = job(publisher, CHANNEL_USERNAME, exit_controller)
+        job_success = job(publisher, parser, CHANNEL_USERNAME, exit_controller)
     except Exception as e:
         print(f"Ошибка при первом запуске: {e}")
         job_success = False
 
-    # --- ИЗМЕНЕНИЕ: ручное планирование со случайным интервалом ---
-    # После первого запуска вычисляем случайное время ожидания до следующего (от 1 до 4 часов)
+    # Случайный интервал 1–4 часа
     if not exit_controller.exit_now:
-        # Генерируем случайный интервал в секундах
-        interval_seconds = random.randint(3600, 14400)  # 1–4 часа
+        interval_seconds = random.randint(3600, 14400)
         next_run = datetime.now() + timedelta(seconds=interval_seconds)
         print(f"\nСледующий запуск через {interval_seconds // 3600} ч {interval_seconds % 3600 // 60} мин")
         print(f"Ожидание до {next_run.strftime('%Y-%m-%d %H:%M:%S')}")
@@ -470,20 +590,17 @@ if __name__ == "__main__":
 
     try:
         while not exit_controller.exit_now:
-            # Проверяем, наступило ли время следующего запуска
             if next_run and datetime.now() >= next_run:
                 print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Наступило время запуска.")
-                job_success = job(publisher, CHANNEL_USERNAME, exit_controller)
+                job_success = job(publisher, parser, CHANNEL_USERNAME, exit_controller)
 
                 if not exit_controller.exit_now:
-                    # Пересчитываем следующий интервал
                     interval_seconds = random.randint(3600, 14400)
                     next_run = datetime.now() + timedelta(seconds=interval_seconds)
                     print(f"\nСледующий запуск через {interval_seconds // 3600} ч {interval_seconds % 3600 // 60} мин")
                     print(f"Ожидание до {next_run.strftime('%Y-%m-%d %H:%M:%S')}")
-                    last_status_print = datetime.now()  # сбросим таймер печати статуса
+                    last_status_print = datetime.now()
 
-            # Печатаем "пульс" раз в 5 минут, чтобы было видно, что скрипт жив
             now = datetime.now()
             if (now - last_status_print).seconds > 300:
                 if next_run:
@@ -494,7 +611,7 @@ if __name__ == "__main__":
                         print(f"[{now.strftime('%H:%M:%S')}] До следующего запуска: {hours} ч {minutes} мин")
                 last_status_print = now
 
-            time.sleep(1)  # ждём 1 секунду перед новой проверкой
+            time.sleep(1)
 
     except KeyboardInterrupt:
         print("\nПолучен сигнал прерывания...")
