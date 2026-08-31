@@ -10,6 +10,8 @@ from datetime import datetime, timedelta
 from contextlib import contextmanager
 from urllib.parse import urlencode
 from dotenv import load_dotenv
+from flask import Flask
+import threading
 
 load_dotenv()  # загружаем переменные из .env
 
@@ -564,6 +566,26 @@ def job(publisher, parser, channel_username, exit_controller):
         traceback.print_exc()
         return False
 
+
+# Создать Flask-приложение
+app = Flask(__name__)
+
+@app.route('/')
+def health():
+    return "Bot is running", 200
+
+def run_web():
+    port = int(os.getenv('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
+
+# Запустить веб-сервер в отдельном потоке, чтобы не мешать основному циклу
+if __name__ == "__main__":
+    # ... ваш существующий код ...
+    # После того как настроили и запустили основной цикл (в конце файла)
+    # перед while not exit_controller.exit_now: добавьте запуск потока
+    web_thread = threading.Thread(target=run_web, daemon=True)
+    web_thread.start()
+    # Остальной код (while not exit_controller.exit_now и т.д.)
 
 # ===================================================================
 # Основной блок
